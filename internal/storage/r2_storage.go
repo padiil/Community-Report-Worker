@@ -17,17 +17,21 @@ type R2Storage struct {
 	PublicURL string
 }
 
-func NewR2Storage(ctx context.Context, endpoint, accessKey, secretKey, bucket, publicURL string) (*R2Storage, error) {
+func NewR2Storage(ctx context.Context, endpoint, accessKey, secretKey, bucket, publicURL, region string) (*R2Storage, error) {
+	if region == "" {
+		region = "auto"
+	}
 	resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
 		return aws.Endpoint{
 			URL:           endpoint,
 			PartitionID:   "aws",
 			SigningName:   "s3",
-			SigningRegion: "auto",
+			SigningRegion: region,
 		}, nil
 	})
 	creds := credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")
 	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(region),
 		config.WithEndpointResolverWithOptions(resolver),
 		config.WithCredentialsProvider(creds),
 	)

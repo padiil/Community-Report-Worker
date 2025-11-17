@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"org-worker/internal/storage"
+
 	"github.com/go-redis/redis/v8"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -60,12 +62,26 @@ func InitMongo() *mongo.Database {
 	return client.Database("veritas")
 }
 
-func LoadR2Config() *R2Config {
-	return &R2Config{
-		Endpoint:  os.Getenv("R2_ENDPOINT"),
-		AccessKey: os.Getenv("R2_ACCESS_KEY_ID"),
-		SecretKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
-		Bucket:    os.Getenv("R2_BUCKET_NAME"),
-		PublicURL: os.Getenv("R2_PUBLIC_URL"),
+func InitStorageProvider(ctx context.Context, logger *slog.Logger) storage.StorageProvider {
+	storageType := os.Getenv("STORAGE_PROVIDER")
+	if storageType == "r2" {
+		logger.Info("Using Cloudflare R2 Storage")
+		r2Endpoint := os.Getenv("R2_ENDPOINT")
+		r2AccessKey := os.Getenv("R2_ACCESS_KEY_ID")
+		r2SecretKey := os.Getenv("R2_SECRET_ACCESS_KEY")
+		r2Bucket := os.Getenv("R2_BUCKET_NAME")
+		r2PublicURL := os.Getenv("R2_PUBLIC_URL")
+		r2Region := os.Getenv("R2_REGION")
+		if r2Region == "" {
+			r2Region = "auto"
+		}
+		storageProvider, err := storage.NewR2Storage(ctx, r2Endpoint, r2AccessKey, r2SecretKey, r2Bucket, r2PublicURL, r2Region)
+		if err != nil {
+			logger.Error("Failed to initialize R2 Storage", "err", err)
+			os.Exit(1)
+		}
+		return storageProvider
 	}
+	logger.Info("Using Local File Storage")
+	return storage.NewLocalStorage("./reports")
 }

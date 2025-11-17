@@ -10,7 +10,6 @@ import (
 	"org-worker/internal/processor/report"
 	"org-worker/internal/queue"
 	"org-worker/internal/repository"
-	"org-worker/internal/storage"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -21,31 +20,16 @@ func main() {
 	slog.SetDefault(logger)
 
 	godotenv.Load(".env")
-	redisClient := config.InitRedis()
 	mongoDB := config.InitMongo()
+	redisClient := config.InitRedis()
 	reportRepo := repository.NewReportRepository(mongoDB)
-	imageJobRepo := repository.NewImageJobRepository(mongoDB) // Tambahkan repository image jobs
+	imageJobRepo := repository.NewImageJobRepository(mongoDB)
 
-	// --- Setup Storage Provider ---
-	var storageProvider storage.StorageProvider
-	storageType := os.Getenv("STORAGE_PROVIDER")
 	ctx := context.Background()
-	if storageType == "r2" {
-		logger.Info("Using Cloudflare R2 Storage")
-		r2Cfg := config.LoadR2Config()
-		var err error
-		storageProvider, err = storage.NewR2Storage(ctx, r2Cfg.Endpoint, r2Cfg.AccessKey, r2Cfg.SecretKey, r2Cfg.Bucket, r2Cfg.PublicURL)
-		if err != nil {
-			logger.Error("Failed to initialize R2 Storage", "err", err)
-			os.Exit(1)
-		}
-	} else {
-		logger.Info("Using Local File Storage")
-		storageProvider = storage.NewLocalStorage("./reports")
-	}
+	storageProvider := config.InitStorageProvider(ctx, logger)
 
 	reportHandler := report.NewReportHandler(reportRepo, storageProvider)
-	imageHandler := image.NewImageHandler(imageJobRepo, storageProvider) // Handler baru untuk image jobs
+	imageHandler := image.NewImageHandler(imageJobRepo, storageProvider)
 
 	logger.Info("Worker is running...")
 	for {
