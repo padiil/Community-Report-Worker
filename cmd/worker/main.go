@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
+
 	"org-worker/internal/config"
 	"org-worker/internal/domain"
 	"org-worker/internal/processor/image"
 	"org-worker/internal/processor/report"
 	"org-worker/internal/queue"
 	"org-worker/internal/repository"
-	"os"
 
 	"github.com/joho/godotenv"
 )
@@ -56,7 +57,6 @@ func main() {
 				continue
 			}
 			logger.Info("Received job", "reportID", payload.ReportID, "taskType", job.TaskType)
-			// Ambil detail report dari MongoDB
 			reportDoc, err := reportRepo.GetReportByID(ctx, payload.ReportID)
 			if err != nil {
 				logger.Error("Failed to get report from MongoDB", "err", err)
@@ -72,13 +72,7 @@ func main() {
 				continue
 			}
 			logger.Info("Received job", "imageJobID", payload.ImageJobID, "taskType", job.TaskType)
-			// Ambil detail image job dari MongoDB
-			imageJobDoc, err := imageJobRepo.GetImageJobByID(ctx, payload.ImageJobID)
-			if err != nil {
-				logger.Error("Failed to get image job from MongoDB", "err", err)
-				continue
-			}
-			if err := imageHandler.HandleImageProcessing(ctx, logger, imageJobDoc, storageProvider); err != nil {
+			if err := imageHandler.HandleImageProcessing(ctx, logger, payload.ImageJobID); err != nil {
 				logger.Error("ERROR process_image", "err", err)
 			}
 		default:

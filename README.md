@@ -89,24 +89,52 @@ redis-cli
 > LPUSH task_queue '{"task_type":"generate_report","payload":{"reportID":"655500a1f12a3d0f3c5a1001"}}'
 ```
 
-### Enqueue Image Processing (Recommended)
-1. **Insert job document to MongoDB (collection: image_jobs):**
+
+### Enqueue Image Processing (Cloud-Native Pattern)
+1. **Frontend/website uploads the file to R2 (Cloudflare R2) in the `raw/` folder:**
+   - Example: `https://your-bucket.r2.dev/raw/test-image.jpg`
+   - It is recommended to use a presigned URL or S3/R2 SDK for security.
+
+2. **Insert a job document into MongoDB (collection: image_jobs):**
 ```json
 {
   "_id": { "$oid": "655501d2f12a3d0f3c5a1002" },
   "status": "PENDING",
-  "sourceImageURL": "https://your-bucket.r2.dev/uploads/originals/test-image.jpeg",
+  "sourceImageURL": "https://your-bucket.r2.dev/raw/test-image.jpg",
   "outputImageURL": "",
   "errorMsg": "",
   "createdAt": { "$date": "2025-11-13T15:00:00.000Z" },
   "updatedAt": { "$date": "2025-11-13T15:00:00.000Z" }
 }
 ```
-2. **Push job ID to Redis:**
+
+3. **Push the job ID to Redis:**
 ```sh
 redis-cli
 > LPUSH task_queue '{"task_type":"process_image","payload":{"imageJobID":"655501d2f12a3d0f3c5a1002"}}'
 ```
+
+4. **The worker will:**
+   - Download the raw file from the R2 `raw/` folder
+   - Resize & convert to WebP
+   - Upload the result to the R2 `uploads/optimized/` folder (e.g. `uploads/optimized/test-image-optimized.webp`)
+   - Update the status and `outputImageURL` in MongoDB
+
+5. **Frontend/backend polls the job status in MongoDB:**
+   - If the status is `COMPLETED`, retrieve the result link from the `outputImageURL` field.
+
+**Recommended R2 folders:**
+- `raw/` for raw files uploaded from frontend/website
+- `uploads/optimized/` for processed files (already resized/converted by the worker)
+
+**Advantages:**
+- Cloud-native, stateless, scalable
+- No local files shared between containers
+- All files are accessed via R2 URLs
+
+**Notes:**
+- Make sure files in the `raw/` folder are accessible to the worker (public/readable)
+- Delete raw files in `raw/` if no longer needed (optional, to save storage)
 
 ---
 

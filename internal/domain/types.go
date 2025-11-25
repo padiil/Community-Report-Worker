@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -16,7 +17,7 @@ type ImageJobPayload struct {
 }
 
 type ReportDoc struct {
-	ID        string                 `bson:"_id"`
+	ID        primitive.ObjectID     `bson:"_id"`
 	Type      string                 `bson:"type"`
 	Status    string                 `bson:"status"`
 	FileURL   string                 `bson:"fileURL"`
@@ -27,11 +28,11 @@ type ReportDoc struct {
 }
 
 type ImageJobDoc struct {
-	ID             string             `bson:"_id"`
+	ID             primitive.ObjectID `bson:"_id"`
 	Status         string             `bson:"status"`
 	SourceImageURL string             `bson:"sourceImageURL"`
 	OutputImageURL string             `bson:"outputImageURL"`
 	ErrorMsg       string             `bson:"errorMsg"`
-	CreatedAt      primitive.DateTime `bson:"createdAt"`
-	UpdatedAt      primitive.DateTime `bson:"updatedAt"`
+	CreatedAt      time.Time          `bson:"createdAt"`
+	UpdatedAt      time.Time          `bson:"updatedAt"`
 }
