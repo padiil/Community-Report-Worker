@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"org-worker/internal/domain"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -19,7 +20,6 @@ func NewReportRepository(db *mongo.Database) *ReportRepository {
 	return &ReportRepository{db: db}
 }
 
-// Ambil dokumen report berdasarkan ID (untuk pola dokumen pelacak)
 func (r *ReportRepository) GetReportByID(ctx context.Context, id string) (domain.ReportDoc, error) {
 	var doc domain.ReportDoc
 	objID, err := primitive.ObjectIDFromHex(id)
@@ -31,7 +31,6 @@ func (r *ReportRepository) GetReportByID(ctx context.Context, id string) (domain
 	return doc, err
 }
 
-// Ambil data aktivitas komunitas (menggunakan skema baru)
 func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters map[string]interface{}) (domain.CommunityActivityData, error) {
 	var data domain.CommunityActivityData
 	var err error
@@ -71,11 +70,11 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 
 	// Fetch events first (communityName & date range)
 	eventFilter := bson.M{
-		"communityName": communityName,
-		"date":          bson.M{"$gte": primitive.NewDateTimeFromTime(startDate), "$lte": primitive.NewDateTimeFromTime(endDate)},
+		"community": communityName,
+		"date":      bson.M{"$gte": primitive.NewDateTimeFromTime(startDate), "$lte": primitive.NewDateTimeFromTime(endDate)},
 	}
 	if communityName == "all" {
-		delete(eventFilter, "communityName")
+		delete(eventFilter, "community")
 	}
 	cursor, err := eventsCollection.Find(ctx, eventFilter)
 	if err != nil {
@@ -84,16 +83,21 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 	defer cursor.Close(ctx)
 
 	type mongoTutor struct {
-		Type   string             `bson:"type"`
-		UserID primitive.ObjectID `bson:"userID,omitempty"`
-		Name   string             `bson:"name"`
+		Type   string `bson:"type"`
+		UserID string `bson:"userID,omitempty"`
+		Name   string `bson:"name"`
 	}
 	type mongoEvent struct {
-		ID        primitive.ObjectID `bson:"_id"`
-		Name      string             `bson:"name"`
-		Community string             `bson:"communityName"`
-		Date      primitive.DateTime `bson:"date"`
-		Tutor     mongoTutor         `bson:"tutor"`
+		ID             primitive.ObjectID `bson:"_id"`
+		Name           string             `bson:"name"`
+		Community      string             `bson:"community"`
+		Date           primitive.DateTime `bson:"date"`
+		Tutor          mongoTutor         `bson:"tutor"`
+		Documentations []string           `bson:"documentations,omitempty"`
+	}
+	type mongoUser struct {
+		ID   string `bson:"_id"`
+		Name string `bson:"name"`
 	}
 	var events []mongoEvent
 	if err = cursor.All(ctx, &events); err != nil {
@@ -102,12 +106,10 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 	data.EventsHeldCount = len(events)
 	data.EventDetails = make([]domain.EventDetail, 0, data.EventsHeldCount)
 
-	// Collect event IDs for active member calculation
 	eventIDs := make([]primitive.ObjectID, 0, len(events))
 	for _, e := range events {
 		eventIDs = append(eventIDs, e.ID)
 	}
-	// Active members: distinct attendee.userID where attendee.type == 'Member' across these events
 	activeFilter := bson.M{
 		"eventID":       bson.M{"$in": eventIDs},
 		"attendee.type": "Member",
@@ -135,15 +137,50 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 		data.ActiveMemberCount = activeCount
 	}
 
-	// Per-event participant count (Members + Guests)
+	tutorNameCache := make(map[string]string)
 	for _, event := range events {
 		count, _ := attendancesCollection.CountDocuments(ctx, bson.M{"eventID": event.ID})
-		tutorName := event.Tutor.Name
+		tutorName := strings.TrimSpace(event.Tutor.Name)
+		userRef := strings.TrimSpace(event.Tutor.UserID)
+		if tutorName == "" && userRef != "" {
+			if cached, ok := tutorNameCache[userRef]; ok {
+				tutorName = cached
+			} else {
+				var tutorDoc mongoUser
+				objID, objErr := primitive.ObjectIDFromHex(userRef)
+				var findErr error
+				if objErr == nil {
+					findErr = usersCollection.FindOne(ctx, bson.M{"_id": objID}).Decode(&tutorDoc)
+				}
+				if findErr != nil {
+					findErr = usersCollection.FindOne(ctx, bson.M{"_id": userRef}).Decode(&tutorDoc)
+				}
+				if findErr == nil {
+					tutorName = strings.TrimSpace(tutorDoc.Name)
+				}
+				tutorNameCache[userRef] = tutorName
+			}
+		}
+		if tutorName == "" {
+			tutorName = "N/A"
+		}
+		var docs []string
+		if len(event.Documentations) > 0 {
+			docs = make([]string, 0, len(event.Documentations))
+			for _, url := range event.Documentations {
+				trimmed := strings.TrimSpace(url)
+				if trimmed == "" {
+					continue
+				}
+				docs = append(docs, trimmed)
+			}
+		}
 		data.EventDetails = append(data.EventDetails, domain.EventDetail{
-			Name:             event.Name,
-			Date:             event.Date.Time(),
-			TutorName:        tutorName,
-			ParticipantCount: int(count),
+			Name:              event.Name,
+			Date:              event.Date.Time(),
+			TutorName:         tutorName,
+			ParticipantCount:  int(count),
+			DocumentationURLs: docs,
 		})
 	}
 	return data, nil
@@ -245,7 +282,6 @@ func (r *ReportRepository) GetProgramImpactData(ctx context.Context, filters map
 
 	milestonesCollection := r.db.Collection("milestones")
 
-	// Build match stage without community (removed from milestones). If a specific community is requested, first gather userIDs belonging to that community.
 	matchStage := bson.M{
 		"date": bson.M{"$gte": primitive.NewDateTimeFromTime(startDate), "$lte": primitive.NewDateTimeFromTime(endDate)},
 	}

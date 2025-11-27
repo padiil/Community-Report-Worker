@@ -9,10 +9,10 @@ import (
 )
 
 func GenerateDemographicsPDF(data domain.ParticipantDemographicsData) (*bytes.Buffer, error) {
-	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.AddPage()
-	AddReportHeader(pdf, "Laporan Demografi Peserta",
-		fmt.Sprintf("Komunitas: %s\nTotal Peserta: %d", data.CommunityName, data.TotalParticipants))
+	pdf := NewReportPDF(
+		"Laporan Demografi Peserta",
+		fmt.Sprintf("Komunitas: %s\nTotal Peserta: %d", data.CommunityName, data.TotalParticipants),
+	)
 
 	addStatSection(pdf, "Berdasarkan Status Pekerjaan", data.ByStatus, data.TotalParticipants)
 	addStatSection(pdf, "Berdasarkan Kategori Usia", data.ByAge, data.TotalParticipants)
@@ -34,7 +34,6 @@ func GenerateDemographicsPDF(data domain.ParticipantDemographicsData) (*bytes.Bu
 		}
 		pdf.Ln(100)
 	}
-	AddReportFooter(pdf)
 	var buf bytes.Buffer
 	if err := pdf.Output(&buf); err != nil {
 		return nil, err

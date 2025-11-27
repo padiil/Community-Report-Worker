@@ -11,15 +11,16 @@ import (
 )
 
 func GenerateFinancialPDF(data domain.FinancialReportData) (*bytes.Buffer, error) {
-	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf := NewReportPDF(
+		"Laporan Transparansi Keuangan",
+		fmt.Sprintf("Periode: %s s/d %s",
+			data.StartDate.Format("02 Jan 2006"),
+			data.EndDate.Format("02 Jan 2006")),
+	)
 	p := message.NewPrinter(language.Indonesian)
 	formatRp := func(val float64) string {
 		return p.Sprintf("Rp %.0f", val)
 	}
-
-	pdf.AddPage()
-	AddReportHeader(pdf, "Laporan Transparansi Keuangan",
-		fmt.Sprintf("Periode: %s s/d %s", data.StartDate.Format("02 Jan 2006"), data.EndDate.Format("02 Jan 2006")))
 
 	AddSectionTitle(pdf, "Ringkasan Keuangan")
 	pdf.SetFont("Arial", "", 12)
@@ -76,7 +77,6 @@ func GenerateFinancialPDF(data domain.FinancialReportData) (*bytes.Buffer, error
 		pdf.CellFormat(60, 7, formatRp(donation.Amount), "1", 0, "R", false, 0, "")
 		pdf.Ln(-1)
 	}
-	AddReportFooter(pdf)
 	var buf bytes.Buffer
 	if err := pdf.Output(&buf); err != nil {
 		return nil, err

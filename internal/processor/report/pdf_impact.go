@@ -9,10 +9,13 @@ import (
 )
 
 func GenerateImpactPDF(data domain.ProgramImpactData) (*bytes.Buffer, error) {
-	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.AddPage()
-	AddReportHeader(pdf, "Laporan Dampak Program",
-		fmt.Sprintf("Komunitas: %s\nPeriode: %s s/d %s", data.CommunityName, data.StartDate.Format("02 Jan 2006"), data.EndDate.Format("02 Jan 2006")))
+	pdf := NewReportPDF(
+		"Laporan Dampak Program",
+		fmt.Sprintf("Komunitas: %s\nPeriode: %s s/d %s",
+			data.CommunityName,
+			data.StartDate.Format("02 Jan 2006"),
+			data.EndDate.Format("02 Jan 2006")),
+	)
 
 	AddSectionTitle(pdf, "Pencapaian Peserta")
 	pdf.SetFont("Arial", "", 12)
@@ -33,7 +36,6 @@ func GenerateImpactPDF(data domain.ProgramImpactData) (*bytes.Buffer, error) {
 			pdf.Ln(70)
 		}
 	}
-	AddReportFooter(pdf)
 	var buf bytes.Buffer
 	if err := pdf.Output(&buf); err != nil {
 		return nil, err

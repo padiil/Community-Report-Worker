@@ -3,10 +3,11 @@ package domain
 import "time"
 
 type EventDetail struct {
-	Name             string    `json:"name"`
-	Date             time.Time `json:"date"`
-	TutorName        string    `json:"tutorName"`
-	ParticipantCount int       `json:"participantCount"`
+	Name              string    `json:"name"`
+	Date              time.Time `json:"date"`
+	TutorName         string    `json:"tutorName"`
+	ParticipantCount  int       `json:"participantCount"`
+	DocumentationURLs []string  `json:"documentationURLs,omitempty"`
 }
 
 type CommunityActivityData struct {
