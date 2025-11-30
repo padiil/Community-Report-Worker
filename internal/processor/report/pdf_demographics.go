@@ -10,13 +10,24 @@ import (
 
 func GenerateDemographicsPDF(data domain.ParticipantDemographicsData) (*bytes.Buffer, error) {
 	pdf := NewReportPDF(
-		"Laporan Demografi Peserta",
-		fmt.Sprintf("Komunitas: %s\nTotal Peserta: %d", data.CommunityName, data.TotalParticipants),
+		"Participant Demographics Report",
+		fmt.Sprintf("Community: %s\nTotal Participants: %d", data.CommunityName, data.TotalParticipants),
 	)
+	pageWidth, _ := pdf.GetPageSize()
+	left, _, right, _ := pdf.GetMargins()
+	usableWidth := pageWidth - left - right
 
-	addStatSection(pdf, "Berdasarkan Status Pekerjaan", data.ByStatus, data.TotalParticipants)
-	addStatSection(pdf, "Berdasarkan Kategori Usia", data.ByAge, data.TotalParticipants)
-	addStatSection(pdf, "Berdasarkan Domisili (Top 10)", data.ByLocation, data.TotalParticipants)
+	pdf.Ln(5)
+	AddSectionTitle(pdf, "Report Snapshot")
+	renderSummaryCards(pdf, []summaryCard{
+		{Label: "Total Participants", Value: fmt.Sprintf("%d People", data.TotalParticipants)},
+		{Label: "Statuses Tracked", Value: fmt.Sprintf("%d Segments", len(data.ByStatus))},
+		{Label: "Locations Tracked", Value: fmt.Sprintf("%d Regions", len(data.ByLocation))},
+	}, left, usableWidth)
+
+	addStatSection(pdf, "By Employment Status", data.ByStatus, data.TotalParticipants)
+	addStatSection(pdf, "By Age Group", data.ByAge, data.TotalParticipants)
+	addStatSection(pdf, "By Location (Top 10)", data.ByLocation, data.TotalParticipants)
 
 	// --- Pie Chart: Status Pekerjaan ---
 	if data.TotalParticipants > 0 {
@@ -47,7 +58,7 @@ func addStatSection(pdf *fpdf.Fpdf, title string, stats []domain.DemographicStat
 	for _, stat := range stats {
 		label := stat.ID
 		if label == "" {
-			label = "Tidak Diisi"
+			label = "Not Specified"
 		}
 		percentage := float64(stat.Count) / float64(total) * 100
 		pdf.Cell(0, 8, fmt.Sprintf("  - %s: %d (%.1f%%)", label, stat.Count, percentage))

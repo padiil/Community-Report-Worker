@@ -12,35 +12,33 @@ import (
 
 func GenerateFinancialPDF(data domain.FinancialReportData) (*bytes.Buffer, error) {
 	pdf := NewReportPDF(
-		"Laporan Transparansi Keuangan",
-		fmt.Sprintf("Periode: %s s/d %s",
+		"Financial Transparency Report",
+		fmt.Sprintf("Period: %s to %s",
 			data.StartDate.Format("02 Jan 2006"),
 			data.EndDate.Format("02 Jan 2006")),
 	)
+	pageWidth, _ := pdf.GetPageSize()
+	left, _, right, _ := pdf.GetMargins()
+	usableWidth := pageWidth - left - right
 	p := message.NewPrinter(language.Indonesian)
 	formatRp := func(val float64) string {
 		return p.Sprintf("Rp %.0f", val)
 	}
 
-	AddSectionTitle(pdf, "Ringkasan Keuangan")
-	pdf.SetFont("Arial", "", 12)
-	pdf.Cell(60, 8, "Total Pemasukan:")
-	pdf.Cell(0, 8, formatRp(data.TotalIncome))
-	pdf.Ln(6)
-	if data.TotalInKindValue > 0 {
-		pdf.Cell(60, 8, "Nilai Donasi In-Kind:")
-		pdf.Cell(0, 8, formatRp(data.TotalInKindValue))
-		pdf.Ln(6)
+	AddSectionTitle(pdf, "Financial Summary")
+	cards := []summaryCard{
+		{Label: "Total Income", Value: formatRp(data.TotalIncome)},
+		{Label: "Total Expenses", Value: formatRp(data.TotalExpenses)},
+		{Label: "Net Income", Value: formatRp(data.NetIncome)},
 	}
-	pdf.Cell(60, 8, "Total Pengeluaran:")
-	pdf.Cell(0, 8, formatRp(data.TotalExpenses))
-	pdf.Ln(6)
-	pdf.SetFont("Arial", "B", 12)
-	pdf.Cell(60, 8, "Pemasukan Bersih (Net):")
-	pdf.Cell(0, 8, formatRp(data.NetIncome))
-	pdf.Ln(12)
+	renderSummaryCards(pdf, cards, left, usableWidth)
+	if data.TotalInKindValue > 0 {
+		pdf.SetFont("Arial", "", 11)
+		pdf.Cell(0, 7, fmt.Sprintf("In-kind donations recorded: %s", formatRp(data.TotalInKindValue)))
+		pdf.Ln(8)
+	}
 
-	AddSectionTitle(pdf, "Alokasi Pengeluaran")
+	AddSectionTitle(pdf, "Expense Allocation")
 	pdf.SetFont("Arial", "", 12)
 	if data.TotalExpenses > 0 {
 		// --- Pie Chart: Alokasi Pengeluaran ---
@@ -59,16 +57,16 @@ func GenerateFinancialPDF(data domain.FinancialReportData) (*bytes.Buffer, error
 			pdf.Ln(6)
 		}
 	} else {
-		pdf.Cell(0, 8, "Tidak ada pengeluaran tercatat pada periode ini.")
+		pdf.Cell(0, 8, "No expenses were recorded for this period.")
 	}
 	pdf.Ln(10)
 
-	AddSectionTitle(pdf, "5 Donasi Terbesar")
+	AddSectionTitle(pdf, "Top 5 Cash Donations")
 	pdf.SetFont("Arial", "B", 10)
 	pdf.SetFillColor(230, 230, 230)
-	pdf.CellFormat(80, 7, "Sumber", "1", 0, "C", true, 0, "")
-	pdf.CellFormat(50, 7, "Tanggal", "1", 0, "C", true, 0, "")
-	pdf.CellFormat(60, 7, "Jumlah", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(80, 7, "Source", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(50, 7, "Date", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(60, 7, "Amount", "1", 0, "C", true, 0, "")
 	pdf.Ln(-1)
 	pdf.SetFont("Arial", "", 10)
 	for _, donation := range data.TopDonations {

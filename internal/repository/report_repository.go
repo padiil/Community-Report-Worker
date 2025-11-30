@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type ReportRepository struct {
@@ -58,7 +59,6 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 	eventsCollection := r.db.Collection("events")
 	attendancesCollection := r.db.Collection("attendances")
 
-	// New members: createdAt in range AND communities contains communityName
 	newMemberFilter := bson.M{
 		"communities": communityName,
 		"createdAt":   bson.M{"$gte": startDate, "$lte": endDate},
@@ -68,7 +68,6 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 	}
 	data.NewMemberCount, _ = usersCollection.CountDocuments(ctx, newMemberFilter)
 
-	// Fetch events first (communityName & date range)
 	eventFilter := bson.M{
 		"community": communityName,
 		"date":      bson.M{"$gte": primitive.NewDateTimeFromTime(startDate), "$lte": primitive.NewDateTimeFromTime(endDate)},
@@ -93,6 +92,7 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 		Community      string             `bson:"community"`
 		Date           primitive.DateTime `bson:"date"`
 		Tutor          mongoTutor         `bson:"tutor"`
+		ImageJobIDs    []string           `bson:"imageJobIds,omitempty"`
 		Documentations []string           `bson:"documentations,omitempty"`
 	}
 	type mongoUser struct {
@@ -105,6 +105,24 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 	}
 	data.EventsHeldCount = len(events)
 	data.EventDetails = make([]domain.EventDetail, 0, data.EventsHeldCount)
+
+	imageJobIDSet := make(map[primitive.ObjectID]struct{})
+	for _, e := range events {
+		for _, idStr := range e.ImageJobIDs {
+			idStr = strings.TrimSpace(idStr)
+			if idStr == "" {
+				continue
+			}
+			if oid, convErr := primitive.ObjectIDFromHex(idStr); convErr == nil {
+				imageJobIDSet[oid] = struct{}{}
+			}
+		}
+	}
+	imageJobOIDs := make([]primitive.ObjectID, 0, len(imageJobIDSet))
+	for oid := range imageJobIDSet {
+		imageJobOIDs = append(imageJobOIDs, oid)
+	}
+	resolvedImageURLs := r.resolveImageJobURLs(ctx, imageJobOIDs)
 
 	eventIDs := make([]primitive.ObjectID, 0, len(events))
 	for _, e := range events {
@@ -164,9 +182,19 @@ func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters
 		if tutorName == "" {
 			tutorName = "N/A"
 		}
-		var docs []string
+		docs := make([]string, 0, len(event.ImageJobIDs)+len(event.Documentations))
+		if len(event.ImageJobIDs) > 0 {
+			for _, idStr := range event.ImageJobIDs {
+				normalized := strings.ToLower(strings.TrimSpace(idStr))
+				if normalized == "" {
+					continue
+				}
+				if url, ok := resolvedImageURLs[normalized]; ok && url != "" {
+					docs = append(docs, url)
+				}
+			}
+		}
 		if len(event.Documentations) > 0 {
-			docs = make([]string, 0, len(event.Documentations))
 			for _, url := range event.Documentations {
 				trimmed := strings.TrimSpace(url)
 				if trimmed == "" {
@@ -329,7 +357,246 @@ func (r *ReportRepository) GetProgramImpactData(ctx context.Context, filters map
 		return data, err
 	}
 
+	highlights, err := r.fetchImpactHighlights(ctx, filters, communityName, startDate, endDate)
+	if err != nil {
+		return data, err
+	}
+	data.Highlights = highlights
+
 	return data, nil
+}
+
+func (r *ReportRepository) fetchImpactHighlights(ctx context.Context, filters map[string]interface{}, communityName string, startDate, endDate time.Time) ([]domain.ImpactHighlight, error) {
+	milestoneIDs := extractHighlightMilestoneIDs(filters)
+	milestonesCollection := r.db.Collection("milestones")
+	match := bson.M{
+		"type": "project_submitted",
+		"date": bson.M{"$gte": primitive.NewDateTimeFromTime(startDate), "$lte": primitive.NewDateTimeFromTime(endDate)},
+	}
+	if communityName != "all" {
+		match["communityName"] = communityName
+	}
+	if len(milestoneIDs) > 0 {
+		match["_id"] = bson.M{"$in": milestoneIDs}
+	}
+	findOpts := options.Find().SetSort(bson.D{{Key: "date", Value: -1}}).SetLimit(3)
+	if len(milestoneIDs) > 0 {
+		findOpts.SetLimit(int64(len(milestoneIDs)))
+	}
+	cursor, err := milestonesCollection.Find(ctx, match, findOpts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	type milestoneDoc struct {
+		ID     primitive.ObjectID `bson:"_id"`
+		UserID primitive.ObjectID `bson:"userID"`
+		Detail struct {
+			Title       string `bson:"title"`
+			Summary     string `bson:"summary"`
+			Description string `bson:"description"`
+		} `bson:"detail"`
+	}
+	var rows []milestoneDoc
+	if err := cursor.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	userIDSet := make(map[primitive.ObjectID]struct{})
+	milestoneOIDList := make([]primitive.ObjectID, 0, len(rows))
+	for _, row := range rows {
+		milestoneOIDList = append(milestoneOIDList, row.ID)
+		if row.UserID != primitive.NilObjectID {
+			userIDSet[row.UserID] = struct{}{}
+		}
+	}
+
+	userNames := r.fetchUserNames(ctx, userIDSet)
+	assetURLs := r.fetchMilestoneAssetURLs(ctx, milestoneOIDList)
+
+	highlights := make([]domain.ImpactHighlight, 0, len(rows))
+	for _, row := range rows {
+		title := strings.TrimSpace(row.Detail.Title)
+		if title == "" {
+			title = "Project Highlight"
+		}
+		summary := strings.TrimSpace(row.Detail.Summary)
+		if summary == "" {
+			summary = strings.TrimSpace(row.Detail.Description)
+		}
+		owner := userNames[row.UserID.Hex()]
+		if owner == "" {
+			owner = "-"
+		}
+		highlights = append(highlights, domain.ImpactHighlight{
+			Title:             title,
+			OwnerName:         owner,
+			Summary:           summary,
+			DocumentationURLs: assetURLs[row.ID.Hex()],
+		})
+	}
+
+	return highlights, nil
+}
+
+func (r *ReportRepository) fetchUserNames(ctx context.Context, ids map[primitive.ObjectID]struct{}) map[string]string {
+	result := make(map[string]string)
+	if len(ids) == 0 {
+		return result
+	}
+	userIDs := make([]primitive.ObjectID, 0, len(ids))
+	for id := range ids {
+		userIDs = append(userIDs, id)
+	}
+	usersCollection := r.db.Collection("users")
+	cursor, err := usersCollection.Find(
+		ctx,
+		bson.M{"_id": bson.M{"$in": userIDs}},
+		options.Find().SetProjection(bson.M{"name": 1}),
+	)
+	if err != nil {
+		return result
+	}
+	defer cursor.Close(ctx)
+	for cursor.Next(ctx) {
+		var user struct {
+			ID   primitive.ObjectID `bson:"_id"`
+			Name string             `bson:"name"`
+		}
+		if err := cursor.Decode(&user); err != nil {
+			continue
+		}
+		result[user.ID.Hex()] = strings.TrimSpace(user.Name)
+	}
+	return result
+}
+
+func (r *ReportRepository) fetchMilestoneAssetURLs(ctx context.Context, milestoneIDs []primitive.ObjectID) map[string][]string {
+	result := make(map[string][]string)
+	if len(milestoneIDs) == 0 {
+		return result
+	}
+	assetsCollection := r.db.Collection("user_assets")
+	cursor, err := assetsCollection.Find(
+		ctx,
+		bson.M{"milestoneID": bson.M{"$in": milestoneIDs}},
+		options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}}),
+	)
+	if err != nil {
+		return result
+	}
+	defer cursor.Close(ctx)
+	for cursor.Next(ctx) {
+		var asset struct {
+			MilestoneID primitive.ObjectID `bson:"milestoneID"`
+			FileURL     string             `bson:"fileURL"`
+		}
+		if err := cursor.Decode(&asset); err != nil {
+			continue
+		}
+		url := strings.TrimSpace(asset.FileURL)
+		if url == "" {
+			continue
+		}
+		key := asset.MilestoneID.Hex()
+		result[key] = append(result[key], url)
+	}
+	return result
+}
+
+func extractHighlightMilestoneIDs(filters map[string]interface{}) []primitive.ObjectID {
+	if len(filters) == 0 {
+		return nil
+	}
+	var ids []primitive.ObjectID
+	keys := []string{"highlight_milestone_ids", "highlightMilestoneIds", "highlight_ids"}
+	for _, key := range keys {
+		raw, ok := filters[key]
+		if !ok || raw == nil {
+			continue
+		}
+		for _, val := range normalizeToStringSlice(raw) {
+			if oid, err := primitive.ObjectIDFromHex(val); err == nil {
+				ids = append(ids, oid)
+			}
+		}
+		if len(ids) > 0 {
+			break
+		}
+	}
+	return ids
+}
+
+func normalizeToStringSlice(value interface{}) []string {
+	var result []string
+	switch v := value.(type) {
+	case []string:
+		for _, item := range v {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if str := fmt.Sprint(item); strings.TrimSpace(str) != "" {
+				result = append(result, strings.TrimSpace(str))
+			}
+		}
+	case primitive.A:
+		for _, item := range v {
+			if str := fmt.Sprint(item); strings.TrimSpace(str) != "" {
+				result = append(result, strings.TrimSpace(str))
+			}
+		}
+	case string:
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	default:
+		if value == nil {
+			return result
+		}
+		if str := strings.TrimSpace(fmt.Sprint(value)); str != "" {
+			result = append(result, str)
+		}
+	}
+	return result
+}
+
+func (r *ReportRepository) resolveImageJobURLs(ctx context.Context, ids []primitive.ObjectID) map[string]string {
+	result := make(map[string]string)
+	if len(ids) == 0 {
+		return result
+	}
+	imageJobsCollection := r.db.Collection("image_jobs")
+	cursor, err := imageJobsCollection.Find(
+		ctx,
+		bson.M{"_id": bson.M{"$in": ids}, "status": "COMPLETED"},
+		options.Find().SetProjection(bson.M{"outputImageURL": 1}),
+	)
+	if err != nil {
+		return result
+	}
+	defer cursor.Close(ctx)
+	for cursor.Next(ctx) {
+		var job struct {
+			ID             primitive.ObjectID `bson:"_id"`
+			OutputImageURL string             `bson:"outputImageURL"`
+		}
+		if err := cursor.Decode(&job); err != nil {
+			continue
+		}
+		url := strings.TrimSpace(job.OutputImageURL)
+		if url == "" {
+			continue
+		}
+		result[strings.ToLower(job.ID.Hex())] = url
+	}
+	return result
 }
 
 type donationFacetResult struct {
@@ -375,14 +642,16 @@ func (r *ReportRepository) GetFinancialSummaryData(ctx context.Context, filters 
 	}
 
 	// Donations pipeline (new schema: donationType, cashDetails.amount, inKindDetails.estimatedValue)
+	cashCondition := []interface{}{bson.M{"$eq": []interface{}{"$donationType", "Cash"}}, "$cashDetails.amount", 0}
+	inKindCondition := []interface{}{bson.M{"$eq": []interface{}{"$donationType", "InKind"}}, "$inKindDetails.estimatedValue", 0}
 	donationPipeline := mongo.Pipeline{
 		bson.D{{Key: "$match", Value: matchStage}},
 		bson.D{{Key: "$facet", Value: bson.M{
 			"totalCash": bson.A{
-				bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$donationType", "Cash"}}, "$cashDetails.amount", 0}}}}},
+				bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": bson.M{"$cond": cashCondition}}}},
 			},
 			"bySource": bson.A{
-				bson.M{"$group": bson.M{"_id": "$source", "total": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$donationType", "Cash"}}, "$cashDetails.amount", 0}}}}},
+				bson.M{"$group": bson.M{"_id": "$source", "total": bson.M{"$sum": bson.M{"$cond": cashCondition}}}},
 				bson.M{"$sort": bson.M{"total": -1}},
 			},
 			"top5Cash": bson.A{
@@ -392,7 +661,7 @@ func (r *ReportRepository) GetFinancialSummaryData(ctx context.Context, filters 
 				bson.M{"$project": bson.M{"source": 1, "amount": "$cashDetails.amount", "date": 1}},
 			},
 			"inKindTotal": bson.A{
-				bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$donationType", "InKind"}}, "$inKindDetails.estimatedValue", 0}}}}},
+				bson.M{"$group": bson.M{"_id": nil, "total": bson.M{"$sum": bson.M{"$cond": inKindCondition}}}},
 			},
 		}}},
 	}

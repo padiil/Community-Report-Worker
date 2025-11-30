@@ -10,6 +10,13 @@ type EventDetail struct {
 	DocumentationURLs []string  `json:"documentationURLs,omitempty"`
 }
 
+type ImpactHighlight struct {
+	Title             string   `json:"title"`
+	OwnerName         string   `json:"ownerName"`
+	Summary           string   `json:"summary,omitempty"`
+	DocumentationURLs []string `json:"documentationURLs,omitempty"`
+}
+
 type CommunityActivityData struct {
 	CommunityName     string        `json:"communityName"`
 	StartDate         time.Time     `json:"startDate"`
@@ -45,10 +52,11 @@ type MilestoneStat struct {
 }
 
 type ProgramImpactData struct {
-	CommunityName string          `json:"communityName"`
-	StartDate     time.Time       `json:"startDate"`
-	EndDate       time.Time       `json:"endDate"`
-	Stats         []MilestoneStat `json:"stats"`
+	CommunityName string            `json:"communityName"`
+	StartDate     time.Time         `json:"startDate"`
+	EndDate       time.Time         `json:"endDate"`
+	Stats         []MilestoneStat   `json:"stats"`
+	Highlights    []ImpactHighlight `json:"highlights,omitempty"`
 }
 
 type FinancialStat struct {

@@ -31,7 +31,7 @@ func createPieChartImage(stats []domain.DemographicStat, total int64) (io.Reader
 	return buf, nil
 }
 
-func createBarChartImage(stats []domain.MilestoneStat) (io.Reader, error) {
+func createBarChartImage(stats []domain.MilestoneStat, title string) (io.Reader, error) {
 	var values []chart.Value
 	for _, stat := range stats {
 		values = append(values, chart.Value{Value: float64(stat.Count), Label: stat.ID})
@@ -40,6 +40,9 @@ func createBarChartImage(stats []domain.MilestoneStat) (io.Reader, error) {
 		Width:  512,
 		Height: 512,
 		Bars:   values,
+	}
+	if title != "" {
+		bar.Title = title
 	}
 	buf := new(bytes.Buffer)
 	if err := bar.Render(chart.PNG, buf); err != nil {

@@ -6,6 +6,7 @@ A modular Go-based worker for generating PDF reports and processing images, desi
 
 ## Features
 - **PDF Report Generation**: Community activity, participant demographics, program impact, financial summary (with charts)
+- **Unified PDF Styling**: Shared helpers keep cards, typography, and spacing consistent across every report
 - **Image Processing**: Resize and convert images to WebP
 - **Storage Abstraction**: Save files locally or to Cloudflare R2 (S3-compatible)
 - **MongoDB & Redis Integration**: Flexible connection (local, Docker, or cloud)
@@ -145,6 +146,7 @@ internal/config/           # Configuration and environment loading
 internal/domain/           # Domain models and types
 internal/processor/image/  # Image processing logic
 internal/processor/report/ # PDF report generation logic
+internal/processor/report/pdf_helpers.go # Shared styling helpers (cards, colors, spacing)
 internal/queue/            # Redis queue helpers
 internal/repository/       # MongoDB data access
 internal/storage/          # Storage abstraction (local/R2)
