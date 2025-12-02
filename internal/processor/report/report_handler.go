@@ -24,12 +24,18 @@ func (h *ReportHandler) HandleReportGeneration(ctx context.Context, logger *slog
 	pdfBuffer, err := h.generatePDF(ctx, reportDoc)
 	if err != nil {
 		logger.Error("Gagal membuat buffer PDF", "err", err)
+		_ = h.repo.UpdateReportStatus(ctx, reportDoc.ID, "failed", "", err.Error())
 		return err
 	}
 	filename := fmt.Sprintf("%s-%s.pdf", reportDoc.Type, reportDoc.ID)
 	fileURL, err := h.storage.Save(ctx, reportDoc.Type, filename, pdfBuffer)
 	if err != nil {
 		logger.Error("Gagal menyimpan file ke storage", "err", err)
+		_ = h.repo.UpdateReportStatus(ctx, reportDoc.ID, "failed", "", err.Error())
+		return err
+	}
+	if err := h.repo.UpdateReportStatus(ctx, reportDoc.ID, "completed", fileURL, ""); err != nil {
+		logger.Error("Gagal memperbarui status laporan", "err", err)
 		return err
 	}
 	logger.Info("Laporan berhasil dibuat dan disimpan", "fileURL", fileURL)

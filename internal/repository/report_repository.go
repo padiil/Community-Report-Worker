@@ -32,6 +32,19 @@ func (r *ReportRepository) GetReportByID(ctx context.Context, id string) (domain
 	return doc, err
 }
 
+func (r *ReportRepository) UpdateReportStatus(ctx context.Context, id primitive.ObjectID, status, fileURL, errMsg string) error {
+	update := bson.M{
+		"$set": bson.M{
+			"status":    status,
+			"fileURL":   fileURL,
+			"errorMsg":  errMsg,
+			"updatedAt": primitive.NewDateTimeFromTime(time.Now()),
+		},
+	}
+	_, err := r.db.Collection("reports").UpdateOne(ctx, bson.M{"_id": id}, update)
+	return err
+}
+
 func (r *ReportRepository) GetCommunityActivityData(ctx context.Context, filters map[string]interface{}) (domain.CommunityActivityData, error) {
 	var data domain.CommunityActivityData
 	var err error
@@ -575,7 +588,7 @@ func (r *ReportRepository) resolveImageJobURLs(ctx context.Context, ids []primit
 	imageJobsCollection := r.db.Collection("image_jobs")
 	cursor, err := imageJobsCollection.Find(
 		ctx,
-		bson.M{"_id": bson.M{"$in": ids}, "status": "COMPLETED"},
+		bson.M{"_id": bson.M{"$in": ids}, "status": "completed"},
 		options.Find().SetProjection(bson.M{"outputImageURL": 1}),
 	)
 	if err != nil {

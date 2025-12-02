@@ -31,15 +31,17 @@ func GetOrgName() string {
 
 func InitRedis() *redis.Client {
 	ctx := context.Background()
-	redisURI := os.Getenv("REDIS_URI")
+	redisAddr := os.Getenv("REDIS_URI")
+	redisPassword := os.Getenv("REDIS_PASSWORD")
 	client := redis.NewClient(&redis.Options{
-		Addr: redisURI,
+		Addr:     redisAddr,
+		Password: redisPassword,
 	})
 	if err := client.Ping(ctx).Err(); err != nil {
 		slog.Error("Gagal terhubung ke Redis", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("Berhasil terhubung ke Redis", "uri", redisURI)
+	slog.Info("Berhasil terhubung ke Redis", "uri", redisAddr)
 	return client
 }
 

@@ -69,7 +69,7 @@ func (h *ImageHandler) HandleImageProcessing(ctx context.Context, logger *slog.L
 
 	// 6. Update Sukses
 	updateData := bson.M{
-		"status":         "COMPLETED",
+		"status":         "completed",
 		"outputImageURL": imageURL,
 		"errorMsg":       "",
 	}
@@ -85,7 +85,7 @@ func (h *ImageHandler) HandleImageProcessing(ctx context.Context, logger *slog.L
 
 func (h *ImageHandler) handleError(ctx context.Context, id primitive.ObjectID, msg string) {
 	h.repo.UpdateStatus(ctx, id, bson.M{
-		"status":   "FAILED",
+		"status":   "failed",
 		"errorMsg": msg,
 	})
 }
