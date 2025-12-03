@@ -3,108 +3,78 @@ package report
 import (
 	"bytes"
 	"fmt"
+
 	"org-worker/internal/domain"
 
-	"codeberg.org/go-pdf/fpdf"
-	_ "github.com/chai2010/webp"
+	"github.com/johnfercher/maroto/v2/pkg/components/image"
+	"github.com/johnfercher/maroto/v2/pkg/components/line"
+	"github.com/johnfercher/maroto/v2/pkg/components/text"
+	"github.com/johnfercher/maroto/v2/pkg/consts/fontstyle"
+	"github.com/johnfercher/maroto/v2/pkg/core"
+	"github.com/johnfercher/maroto/v2/pkg/props"
 )
 
 func GenerateCommunityActivityPDF(data domain.CommunityActivityData) (*bytes.Buffer, error) {
-	pdf := NewReportPDF(
-		"Community Activity Report",
-		fmt.Sprintf("Community: %s  |  Period: %s - %s",
+	m := GetMarotoInstance(
+		"Laporan Aktivitas Komunitas",
+		fmt.Sprintf("Komunitas: %s | Periode: %s - %s",
 			data.CommunityName,
 			data.StartDate.Format("02 Jan 2006"),
 			data.EndDate.Format("02 Jan 2006")),
 	)
 
-	pageWidth, _ := pdf.GetPageSize()
-	left, _, right, _ := pdf.GetMargins()
-	usableWidth := pageWidth - left - right
+	addSectionTitle(m, "Ringkasan Kinerja")
+	renderSummaryCards(m, []summaryCard{
+		{Label: "Anggota Baru", Value: fmt.Sprintf("%d Orang", data.NewMemberCount)},
+		{Label: "Anggota Aktif", Value: fmt.Sprintf("%d Orang", data.ActiveMemberCount)},
+		{Label: "Total Kegiatan", Value: fmt.Sprintf("%d Kegiatan", data.EventsHeldCount)},
+	})
 
-	pdf.Ln(5)
-	AddSectionTitle(pdf, "Performance Summary")
-	renderSummaryCards(pdf, []summaryCard{
-		{Label: "New Members", Value: fmt.Sprintf("%d People", data.NewMemberCount)},
-		{Label: "Active Members", Value: fmt.Sprintf("%d People", data.ActiveMemberCount)},
-		{Label: "Total Events", Value: fmt.Sprintf("%d Events", data.EventsHeldCount)},
-	}, left, usableWidth)
-
-	AddSectionTitle(pdf, "Event Details & Documentation")
-	for i, event := range data.EventDetails {
-		ensureVerticalSpace(pdf, 100)
-		eventTitle := fmt.Sprintf("  %d. %s", i+1, event.Name)
-		drawCardHeader(pdf, eventTitle, usableWidth)
-
-		pdf.SetFont("Arial", "", 10)
-		r, g, b := hexToRGB(ColorTextMute)
-		pdf.SetTextColor(r, g, b)
-		meta := fmt.Sprintf("Date: %s   |   Facilitator: %s   |   Participants: %d",
-			event.Date.Format("Monday, 02 Jan 2006"), event.TutorName, event.ParticipantCount)
-		pdf.CellFormat(usableWidth, 7, "      "+meta, "B", 1, "L", false, 0, "")
-		pdf.SetTextColor(0, 0, 0)
-		pdf.Ln(4)
-
-		if len(event.DocumentationURLs) == 0 {
-			pdf.SetFont("Arial", "I", 9)
-			r, g, b = hexToRGB(ColorTextMute)
-			pdf.SetTextColor(r, g, b)
-			pdf.CellFormat(0, 6, "      (No photo documentation)", "", 1, "L", false, 0, "")
-			pdf.SetTextColor(0, 0, 0)
-			pdf.Ln(4)
-			continue
-		}
-
-		maxImages := 4
-		gap := 3.0
-		imgWidth := (usableWidth - gap*float64(maxImages-1)) / float64(maxImages)
-		imgHeight := imgWidth * 0.65
-		xStart := left
-		yStart := pdf.GetY()
-		if yStart+imgHeight > 250 {
-			pdf.AddPage()
-			yStart = pdf.GetY()
-		}
-
-		count := len(event.DocumentationURLs)
-		if count > maxImages {
-			count = maxImages
-		}
-		for j := 0; j < count; j++ {
-			currentX := xStart + float64(j)*(imgWidth+gap)
-			imgURL := event.DocumentationURLs[j]
-			imgBuf, _, _, err := downloadImageAsJPG(imgURL)
-			if err == nil {
-				imgName := fmt.Sprintf("evt_%d_%d", i, j)
-				pdf.RegisterImageOptionsReader(imgName, fpdf.ImageOptions{ImageType: "JPG"}, imgBuf)
-				pdf.SetDrawColor(220, 220, 220)
-				pdf.Rect(currentX, yStart, imgWidth, imgHeight, "D")
-				pdf.Image(imgName, currentX+0.5, yStart+0.5, imgWidth-1, imgHeight-1, false, "", 0, "")
-			} else {
-				pdf.SetFillColor(240, 240, 240)
-				pdf.Rect(currentX, yStart, imgWidth, imgHeight, "F")
-				pdf.SetFont("Arial", "I", 7)
-				pdf.SetTextColor(150, 150, 150)
-				pdf.SetXY(currentX, yStart+(imgHeight/2)-2)
-				pdf.CellFormat(imgWidth, 4, "Img Err", "", 0, "C", false, 0, "")
-				pdf.SetTextColor(0, 0, 0)
-			}
-		}
-		pdf.SetY(yStart + imgHeight + 8)
-
-		if len(event.DocumentationURLs) > maxImages {
-			pdf.SetFont("Arial", "I", 8)
-			r, g, b = hexToRGB(ColorTextMute)
-			pdf.SetTextColor(r, g, b)
-			pdf.CellFormat(0, 5, fmt.Sprintf("      (+%d more documentation photos...)", len(event.DocumentationURLs)-maxImages), "0", 1, "L", false, 0, "")
-			pdf.SetTextColor(0, 0, 0)
-			pdf.Ln(2)
+	addSectionTitle(m, "Detail Kegiatan & Dokumentasi")
+	if len(data.EventDetails) == 0 {
+		m.AddRow(8, text.NewCol(12, "Tidak ada kegiatan yang tercatat pada periode ini.", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
+	} else {
+		for i, event := range data.EventDetails {
+			renderCommunityEvent(m, i, event)
 		}
 	}
 
-	var buf bytes.Buffer
-	if err := pdf.Output(&buf); err != nil {
+	document, err := m.Generate()
+	if err != nil {
 		return nil, err
 	}
-	return &buf, nil
+	return marotoDocumentBuffer(document), nil
+}
+
+func renderCommunityEvent(m core.Maroto, idx int, event domain.EventDetail) {
+	m.AddRow(8, text.NewCol(12, fmt.Sprintf("%d. %s", idx+1, event.Name), props.Text{
+		Style: fontstyle.Bold,
+		Size:  12,
+		Color: ColorTextMain,
+	}))
+	meta := fmt.Sprintf("Tanggal: %s   |   Fasilitator: %s   |   Peserta: %d",
+		event.Date.Format("02 Jan 2006"), event.TutorName, event.ParticipantCount)
+	m.AddRow(6, text.NewCol(12, meta, props.Text{Size: 9, Color: ColorTextMute}))
+
+	if len(event.DocumentationURLs) == 0 {
+		m.AddRow(6, text.NewCol(12, "(Tidak ada dokumentasi foto)", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
+	} else {
+		cols := make([]core.Col, 0, 4)
+		max := len(event.DocumentationURLs)
+		if max > 4 {
+			max = 4
+		}
+		for j := 0; j < max; j++ {
+			imgBytes, err := downloadImageAsJPG(event.DocumentationURLs[j])
+			if err != nil {
+				continue
+			}
+			cols = append(cols, image.NewFromBytesCol(3, imgBytes, "jpg", props.Rect{Percent: 95, Center: true}))
+		}
+		if len(cols) > 0 {
+			m.AddRow(40, cols...)
+		}
+	}
+	m.AddRow(4, line.NewCol(12))
+	m.AddRow(3, text.NewCol(12, ""))
 }

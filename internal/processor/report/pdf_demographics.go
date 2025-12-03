@@ -3,66 +3,72 @@ package report
 import (
 	"bytes"
 	"fmt"
+
 	"org-worker/internal/domain"
 
-	"codeberg.org/go-pdf/fpdf"
+	"github.com/johnfercher/maroto/v2/pkg/components/image"
+	"github.com/johnfercher/maroto/v2/pkg/components/text"
+	"github.com/johnfercher/maroto/v2/pkg/consts/fontstyle"
+	"github.com/johnfercher/maroto/v2/pkg/core"
+	"github.com/johnfercher/maroto/v2/pkg/props"
 )
 
 func GenerateDemographicsPDF(data domain.ParticipantDemographicsData) (*bytes.Buffer, error) {
-	pdf := NewReportPDF(
-		"Participant Demographics Report",
-		fmt.Sprintf("Community: %s\nTotal Participants: %d", data.CommunityName, data.TotalParticipants),
+	m := GetMarotoInstance(
+		"Laporan Demografi Peserta",
+		fmt.Sprintf("Komunitas: %s | Total Peserta: %d", data.CommunityName, data.TotalParticipants),
 	)
-	pageWidth, _ := pdf.GetPageSize()
-	left, _, right, _ := pdf.GetMargins()
-	usableWidth := pageWidth - left - right
 
-	pdf.Ln(5)
-	AddSectionTitle(pdf, "Report Snapshot")
-	renderSummaryCards(pdf, []summaryCard{
-		{Label: "Total Participants", Value: fmt.Sprintf("%d People", data.TotalParticipants)},
-		{Label: "Statuses Tracked", Value: fmt.Sprintf("%d Segments", len(data.ByStatus))},
-		{Label: "Locations Tracked", Value: fmt.Sprintf("%d Regions", len(data.ByLocation))},
-	}, left, usableWidth)
+	addSectionTitle(m, "Ringkasan Laporan")
+	renderSummaryCards(m, []summaryCard{
+		{Label: "Total Peserta", Value: fmt.Sprintf("%d Orang", data.TotalParticipants)},
+		{Label: "Status yang Dipantau", Value: fmt.Sprintf("%d Segmen", len(data.ByStatus))},
+		{Label: "Lokasi yang Dipantau", Value: fmt.Sprintf("%d Wilayah", len(data.ByLocation))},
+	})
 
-	addStatSection(pdf, "By Employment Status", data.ByStatus, data.TotalParticipants)
-	addStatSection(pdf, "By Age Group", data.ByAge, data.TotalParticipants)
-	addStatSection(pdf, "By Location (Top 10)", data.ByLocation, data.TotalParticipants)
+	renderDemographicSection(m, "Berdasarkan Status Pekerjaan", data.ByStatus, data.TotalParticipants)
+	renderDemographicSection(m, "Berdasarkan Kelompok Usia", data.ByAge, data.TotalParticipants)
+	renderDemographicSection(m, "Berdasarkan Lokasi (Top 10)", data.ByLocation, data.TotalParticipants)
 
-	// --- Pie Chart: Status Pekerjaan ---
-	if data.TotalParticipants > 0 {
-		pieImg, err := createPieChartImage(data.ByStatus, data.TotalParticipants)
-		if err == nil {
-			pdf.RegisterImageOptionsReader("pieStatus", fpdf.ImageOptions{ImageType: "PNG"}, pieImg)
-			pdf.Image("pieStatus", 10, pdf.GetY(), 90, 0, false, "", 0, "")
+	addSectionTitle(m, "Grafik Distribusi")
+	if data.TotalParticipants <= 0 {
+		m.AddRow(8, text.NewCol(12, "Tidak dapat menampilkan grafik tanpa total peserta.", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
+	} else {
+		var chartCols []core.Col
+		if statusChart, err := createPieChartImage(data.ByStatus, data.TotalParticipants); err == nil && statusChart != nil {
+			chartCols = append(chartCols, image.NewFromBytesCol(6, statusChart, "png", props.Rect{Percent: 90, Center: true}))
 		}
-		pdf.Ln(95)
-		// Pie Chart: Kategori Usia
-		pieImg, err = createPieChartImage(data.ByAge, data.TotalParticipants)
-		if err == nil {
-			pdf.RegisterImageOptionsReader("pieAge", fpdf.ImageOptions{ImageType: "PNG"}, pieImg)
-			pdf.Image("pieAge", 110, pdf.GetY()-95, 90, 0, false, "", 0, "")
+		if ageChart, err := createPieChartImage(data.ByAge, data.TotalParticipants); err == nil && ageChart != nil {
+			chartCols = append(chartCols, image.NewFromBytesCol(6, ageChart, "png", props.Rect{Percent: 90, Center: true}))
 		}
-		pdf.Ln(100)
+		if len(chartCols) == 0 {
+			m.AddRow(8, text.NewCol(12, "Grafik tidak dapat dibuat.", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
+		} else {
+			m.AddRow(80, chartCols...)
+		}
 	}
-	var buf bytes.Buffer
-	if err := pdf.Output(&buf); err != nil {
+
+	document, err := m.Generate()
+	if err != nil {
 		return nil, err
 	}
-	return &buf, nil
+	return marotoDocumentBuffer(document), nil
 }
 
-func addStatSection(pdf *fpdf.Fpdf, title string, stats []domain.DemographicStat, total int64) {
-	AddSectionTitle(pdf, title)
-	pdf.SetFont("Arial", "", 12)
+func renderDemographicSection(m core.Maroto, title string, stats []domain.DemographicStat, total int64) {
+	addSectionTitle(m, title)
+	if len(stats) == 0 || total == 0 {
+		m.AddRow(6, text.NewCol(12, "Tidak ada data untuk kategori ini.", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
+		return
+	}
 	for _, stat := range stats {
 		label := stat.ID
 		if label == "" {
-			label = "Not Specified"
+			label = "Tidak Ditentukan"
 		}
-		percentage := float64(stat.Count) / float64(total) * 100
-		pdf.Cell(0, 8, fmt.Sprintf("  - %s: %d (%.1f%%)", label, stat.Count, percentage))
-		pdf.Ln(6)
+		percentage := (float64(stat.Count) / float64(total)) * 100
+		rowText := fmt.Sprintf("- %s: %d (%.1f%%)", label, stat.Count, percentage)
+		m.AddRow(6, text.NewCol(12, rowText, props.Text{Size: 10}))
 	}
-	pdf.Ln(6)
+	m.AddRow(4, text.NewCol(12, ""))
 }

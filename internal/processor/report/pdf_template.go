@@ -1,69 +1,104 @@
 package report
 
 import (
+	"bytes"
 	"fmt"
-	"org-worker/internal/config"
+	"image"
+	"image/jpeg"
+	_ "image/png"
+	"net/http"
+	"time"
 
-	"codeberg.org/go-pdf/fpdf"
+	"github.com/johnfercher/maroto/v2"
+	"github.com/johnfercher/maroto/v2/pkg/components/line"
+	"github.com/johnfercher/maroto/v2/pkg/components/text"
+	"github.com/johnfercher/maroto/v2/pkg/config"
+	"github.com/johnfercher/maroto/v2/pkg/consts/align"
+	"github.com/johnfercher/maroto/v2/pkg/consts/fontstyle"
+	"github.com/johnfercher/maroto/v2/pkg/core"
+	"github.com/johnfercher/maroto/v2/pkg/props"
 )
 
-type ReportTheme struct {
-	FontFamily string
-	Primary    struct{ R, G, B int }
-	Accent     struct{ R, G, B int }
-	LogoPath   string
+var (
+	ColorPrimary   = &props.Color{Red: 30, Green: 58, Blue: 138}
+	ColorSecondary = &props.Color{Red: 59, Green: 130, Blue: 246}
+	ColorBgLight   = &props.Color{Red: 243, Green: 244, Blue: 246}
+	ColorTextMain  = &props.Color{Red: 31, Green: 41, Blue: 55}
+	ColorTextMute  = &props.Color{Red: 107, Green: 114, Blue: 128}
+)
+
+// GetMarotoInstance configures a Maroto PDF with consistent header/footer branding.
+func GetMarotoInstance(title, subtitle string) core.Maroto {
+	cfg := config.NewBuilder().
+		WithLeftMargin(15).
+		WithRightMargin(15).
+		WithTopMargin(18).
+		Build()
+
+	m := maroto.New(cfg)
+
+	headerRows := []core.Row{
+		text.NewRow(16, title, props.Text{
+			Style: fontstyle.Bold,
+			Size:  16,
+			Color: ColorPrimary,
+		}),
+		text.NewRow(10, subtitle, props.Text{
+			Size:  10,
+			Color: ColorTextMute,
+		}),
+		line.NewRow(4),
+	}
+	if err := m.RegisterHeader(headerRows...); err != nil {
+		panic(fmt.Sprintf("failed to register header: %v", err))
+	}
+
+	footerRows := []core.Row{
+		line.NewRow(4),
+		text.NewRow(8, fmt.Sprintf("Generated %s", time.Now().Format("02 Jan 2006")), props.Text{
+			Size:  8,
+			Style: fontstyle.Italic,
+			Color: ColorTextMute,
+			Align: align.Right,
+		}),
+	}
+	if err := m.RegisterFooter(footerRows...); err != nil {
+		panic(fmt.Sprintf("failed to register footer: %v", err))
+	}
+
+	return m
 }
 
-var DefaultTheme = ReportTheme{
-	FontFamily: "Arial",
-	Primary:    struct{ R, G, B int }{33, 37, 41},
-	Accent:     struct{ R, G, B int }{220, 230, 241},
-	LogoPath:   "",
+// addSectionTitle draws a consistent section heading row across reports.
+func addSectionTitle(m core.Maroto, title string) {
+	row := m.AddRow(10, text.NewCol(12, title, props.Text{
+		Style: fontstyle.Bold,
+		Size:  12,
+		Color: ColorSecondary,
+	}))
+	row.WithStyle(&props.Cell{BackgroundColor: ColorBgLight})
+	m.AddRow(4, text.NewCol(12, ""))
 }
 
-func NewReportPDF(title, subtitle string) *fpdf.Fpdf {
-	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.SetMargins(15, 25, 15)
-	pdf.SetAutoPageBreak(true, 20)
+func downloadImageAsJPG(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 
-	pdf.SetHeaderFuncMode(func() {
-		if DefaultTheme.LogoPath != "" {
-			pdf.ImageOptions(DefaultTheme.LogoPath, 15, 10, 25, 0, false, fpdf.ImageOptions{ImageType: ""}, 0, "")
-		}
-		pdf.SetY(12)
-		pdf.SetFont(DefaultTheme.FontFamily, "B", 16)
-		pdf.SetTextColor(DefaultTheme.Primary.R, DefaultTheme.Primary.G, DefaultTheme.Primary.B)
-		pdf.Cell(0, 8, title)
-		pdf.Ln(9)
-		pdf.SetFont(DefaultTheme.FontFamily, "", 11)
-		pdf.MultiCell(0, 6, subtitle, "", "L", false)
-		pdf.Ln(2)
-		pdf.SetDrawColor(200, 200, 200)
-		pdf.Line(15, pdf.GetY(), 195, pdf.GetY())
-		pdf.Ln(4)
-	}, true)
+	img, _, err := image.Decode(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 
-	pdf.SetFooterFunc(func() {
-		pdf.SetY(-18)
-		pdf.SetDrawColor(DefaultTheme.Accent.R, DefaultTheme.Accent.G, DefaultTheme.Accent.B)
-		pdf.Line(15, pdf.GetY(), 195, pdf.GetY())
-		pdf.Ln(4)
-		pdf.SetFont(DefaultTheme.FontFamily, "I", 10)
-		pdf.CellFormat(0, 6, config.GetOrgName(), "", 0, "L", false, 0, "")
-		pageInfo := fmt.Sprintf("%d/{nb}", pdf.PageNo())
-		pdf.CellFormat(0, 6, pageInfo, "", 0, "R", false, 0, "")
-	})
-
-	pdf.AliasNbPages("{nb}")
-	pdf.AddPage()
-	pdf.SetFont(DefaultTheme.FontFamily, "", 12)
-	pdf.SetTextColor(0, 0, 0)
-	return pdf
+	buf := new(bytes.Buffer)
+	if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 85}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
-func AddSectionTitle(pdf *fpdf.Fpdf, title string) {
-	pdf.SetFillColor(DefaultTheme.Accent.R, DefaultTheme.Accent.G, DefaultTheme.Accent.B)
-	pdf.SetFont(DefaultTheme.FontFamily, "B", 13)
-	pdf.CellFormat(0, 9, title, "", 1, "L", true, 0, "")
-	pdf.Ln(3)
+func marotoDocumentBuffer(doc core.Document) *bytes.Buffer {
+	return bytes.NewBuffer(doc.GetBytes())
 }

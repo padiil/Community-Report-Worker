@@ -3,15 +3,14 @@ package report
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"org-worker/internal/domain"
 
 	"github.com/wcharczuk/go-chart/v2"
 )
 
-func createPieChartImage(stats []domain.DemographicStat, total int64) (io.Reader, error) {
+func createPieChartImage(stats []domain.DemographicStat, total int64) ([]byte, error) {
 	if total == 0 {
-		return new(bytes.Buffer), nil
+		return nil, nil
 	}
 	var values []chart.Value
 	for _, stat := range stats {
@@ -28,10 +27,10 @@ func createPieChartImage(stats []domain.DemographicStat, total int64) (io.Reader
 	if err := pie.Render(chart.PNG, buf); err != nil {
 		return nil, err
 	}
-	return buf, nil
+	return buf.Bytes(), nil
 }
 
-func createBarChartImage(stats []domain.MilestoneStat, title string) (io.Reader, error) {
+func createBarChartImage(stats []domain.MilestoneStat, title string) ([]byte, error) {
 	var values []chart.Value
 	for _, stat := range stats {
 		values = append(values, chart.Value{Value: float64(stat.Count), Label: stat.ID})
@@ -48,7 +47,7 @@ func createBarChartImage(stats []domain.MilestoneStat, title string) (io.Reader,
 	if err := bar.Render(chart.PNG, buf); err != nil {
 		return nil, err
 	}
-	return buf, nil
+	return buf.Bytes(), nil
 }
 
 func convertFinancialStatToDemographic(stats []domain.FinancialStat) []domain.DemographicStat {

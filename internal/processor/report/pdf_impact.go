@@ -7,126 +7,95 @@ import (
 
 	"org-worker/internal/domain"
 
-	"codeberg.org/go-pdf/fpdf"
+	"github.com/johnfercher/maroto/v2/pkg/components/image"
+	"github.com/johnfercher/maroto/v2/pkg/components/line"
+	"github.com/johnfercher/maroto/v2/pkg/components/text"
+	"github.com/johnfercher/maroto/v2/pkg/consts/align"
+	"github.com/johnfercher/maroto/v2/pkg/consts/fontstyle"
+	"github.com/johnfercher/maroto/v2/pkg/core"
+	"github.com/johnfercher/maroto/v2/pkg/props"
 )
 
 func GenerateImpactPDF(data domain.ProgramImpactData) (*bytes.Buffer, error) {
-	pdf := NewReportPDF(
-		"Program Impact Report",
-		fmt.Sprintf("Community: %s\nPeriod: %s to %s",
+	m := GetMarotoInstance(
+		"Laporan Dampak Program",
+		fmt.Sprintf("Community: %s | Period: %s - %s",
 			data.CommunityName,
 			data.StartDate.Format("02 Jan 2006"),
 			data.EndDate.Format("02 Jan 2006")),
 	)
 
-	pageWidth, _ := pdf.GetPageSize()
-	left, _, right, _ := pdf.GetMargins()
-	usableWidth := pageWidth - left - right
+	statMap := map[string]int{}
+	for _, stat := range data.Stats {
+		statMap[stat.ID] = stat.Count
+	}
+	addSectionTitle(m, "Ringkasan Kinerja")
+	renderSummaryCards(m, []summaryCard{
+		{Label: "Proyek Diajukan", Value: fmt.Sprintf("%d Proyek", statMap["project_submitted"])},
+		{Label: "Level Up", Value: fmt.Sprintf("%d Anggota", statMap["level_up"])},
+		{Label: "Penempatan Kerja", Value: fmt.Sprintf("%d Penempatan", statMap["job_placement"])},
+	})
 
-	AddSectionTitle(pdf, "Achievement Statistics")
-	pdf.SetFont("Arial", "", 12)
-	if len(data.Stats) == 0 {
-		pdf.Cell(0, 8, "No achievements recorded for this period.")
+	addSectionTitle(m, "Sorotan Dampak & Dokumentasi")
+	if len(data.Highlights) == 0 {
+		m.AddRow(8, text.NewCol(12, "Tidak ada sorotan dampak yang tercatat pada periode ini.", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
 	} else {
-		cards := make([]summaryCard, 0, len(data.Stats))
-		for _, stat := range data.Stats {
-			cards = append(cards, summaryCard{
-				Label: translateMilestoneType(stat.ID),
-				Value: fmt.Sprintf("%d Participants", stat.Count),
-			})
-		}
-		renderSummaryCards(pdf, cards, left, usableWidth)
-		for _, stat := range data.Stats {
-			label := translateMilestoneType(stat.ID)
-			pdf.Cell(80, 8, fmt.Sprintf("  - %s:", label))
-			pdf.SetFont("Arial", "B", 12)
-			pdf.Cell(0, 8, fmt.Sprintf("%d", stat.Count))
-			pdf.SetFont("Arial", "", 12)
-			pdf.Ln(7)
-		}
-		pdf.Ln(5)
-		barImg, err := createBarChartImage(data.Stats, "Achievement Distribution")
-		if err == nil {
-			pdf.RegisterImageOptionsReader("barImpact", fpdf.ImageOptions{ImageType: "PNG"}, barImg)
-			const chartHeight = 80.0
-			xCenter := left + (usableWidth-chartHeight)/2
-			pdf.Image("barImpact", xCenter, pdf.GetY(), 0, chartHeight, false, "", 0, "")
-			pdf.Ln(chartHeight + 10)
-		}
-	}
-
-	if len(data.Highlights) > 0 {
-		ensureVerticalSpace(pdf, 70)
-		AddSectionTitle(pdf, "Participant Project Highlights")
 		for idx, highlight := range data.Highlights {
-			renderImpactHighlight(pdf, idx, highlight, left, usableWidth)
+			renderImpactHighlight(m, idx, highlight)
 		}
 	}
 
-	var buf bytes.Buffer
-	if err := pdf.Output(&buf); err != nil {
+	addSectionTitle(m, "Grafik Distribusi Pencapaian")
+	if len(data.Stats) == 0 {
+		m.AddRow(8, text.NewCol(12, "Tidak ada data milestone untuk divisualisasikan.", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
+	} else if chartBytes, err := createBarChartImage(data.Stats, ""); err == nil && chartBytes != nil {
+		m.AddRow(70, image.NewFromBytesCol(12, chartBytes, "png", props.Rect{Percent: 90, Center: true}))
+	}
+
+	document, err := m.Generate()
+	if err != nil {
 		return nil, err
 	}
-	return &buf, nil
+	return marotoDocumentBuffer(document), nil
 }
 
-func translateMilestoneType(milestoneType string) string {
-	switch milestoneType {
-	case "project_submitted":
-		return "Final Projects Submitted"
-	case "level_up":
-		return "Participants Leveling Up"
-	case "job_placement":
-		return "Participants Hired"
-	default:
-		return milestoneType
-	}
-}
+func renderImpactHighlight(m core.Maroto, idx int, highlight domain.ImpactHighlight) {
+	m.AddRow(8, text.NewCol(12, fmt.Sprintf("%d. %s", idx+1, highlight.Title), props.Text{
+		Style: fontstyle.Bold,
+		Size:  12,
+		Color: ColorTextMain,
+	}))
+	m.AddRow(5, text.NewCol(12, fmt.Sprintf("Penanggung Jawab: %s", highlight.OwnerName), props.Text{Size: 9, Color: ColorTextMute}))
 
-func renderImpactHighlight(pdf *fpdf.Fpdf, idx int, highlight domain.ImpactHighlight, left float64, usableWidth float64) {
-	ensureVerticalSpace(pdf, 60)
-	title := fmt.Sprintf("  %d. %s", idx+1, highlight.Title)
-	drawCardHeader(pdf, title, usableWidth)
-	pdf.SetFont("Arial", "I", 10)
-	pdf.SetTextColor(80, 80, 80)
-	pdf.Cell(0, 6, fmt.Sprintf("    Submitted by: %s", highlight.OwnerName))
-	pdf.Ln(8)
-	pdf.SetTextColor(0, 0, 0)
-	pdf.SetFont("Arial", "", 10)
 	if summary := strings.TrimSpace(highlight.Summary); summary != "" {
-		pdf.MultiCell(0, 5, fmt.Sprintf("    %s", summary), "", "L", false)
-		pdf.Ln(2)
+		m.AddRow(10, text.NewCol(12, summary, props.Text{Size: 10, Align: align.Left}))
+	} else {
+		m.AddRow(6, text.NewCol(12, "(Tidak ada deskripsi sorotan)", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
 	}
 
 	if len(highlight.DocumentationURLs) == 0 {
-		pdf.SetFont("Arial", "I", 9)
-		pdf.Cell(0, 6, "    (No visual documentation yet)")
-		pdf.Ln(8)
-		return
+		m.AddRow(6, text.NewCol(12, "(Tidak ada foto dokumentasi)", props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
+	} else {
+		cols := make([]core.Col, 0, 4)
+		max := len(highlight.DocumentationURLs)
+		if max > 4 {
+			max = 4
+		}
+		for i := 0; i < max; i++ {
+			imgBytes, err := downloadImageAsJPG(highlight.DocumentationURLs[i])
+			if err != nil {
+				continue
+			}
+			cols = append(cols, image.NewFromBytesCol(3, imgBytes, "jpg", props.Rect{Percent: 95, Center: true}))
+		}
+		if len(cols) > 0 {
+			m.AddRow(40, cols...)
+		}
+		if len(highlight.DocumentationURLs) > max {
+			m.AddRow(6, text.NewCol(12, fmt.Sprintf("(+%d foto dokumentasi lainnya)", len(highlight.DocumentationURLs)-max), props.Text{Style: fontstyle.Italic, Color: ColorTextMute}))
+		}
 	}
-	thumbnailWidth := 100.0
-	drawHighlightThumbnail(pdf, highlight.DocumentationURLs[0], left+10, thumbnailWidth, idx)
-	if extra := len(highlight.DocumentationURLs) - 1; extra > 0 {
-		pdf.SetFont("Arial", "I", 8)
-		pdf.Cell(0, 5, fmt.Sprintf("    (+%d additional documentation items)", extra))
-		pdf.Ln(7)
-	}
-	pdf.Ln(4)
-}
 
-func drawHighlightThumbnail(pdf *fpdf.Fpdf, url string, x float64, width float64, idx int) {
-	imgBuf, imgW, imgH, err := downloadImageAsJPG(url)
-	if err != nil || imgW == 0 {
-		pdf.SetFont("Arial", "I", 9)
-		pdf.Cell(0, 6, "    (Image could not be loaded)")
-		pdf.Ln(8)
-		return
-	}
-	imgName := fmt.Sprintf("highlight_img_%d_%d", pdf.PageNo(), idx)
-	pdf.RegisterImageOptionsReader(imgName, fpdf.ImageOptions{ImageType: "JPG"}, imgBuf)
-	ratio := imgH / imgW
-	imgHeight := width * ratio
-	currentY := pdf.GetY()
-	pdf.Image(imgName, x, currentY, width, 0, false, "", 0, "")
-	pdf.SetY(currentY + imgHeight + 5)
+	m.AddRow(4, line.NewCol(12))
+	m.AddRow(4, text.NewCol(12, ""))
 }
