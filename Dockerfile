@@ -9,6 +9,6 @@ FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 WORKDIR /app
 COPY --from=builder /app/worker ./worker
-RUN chown nobody:nobody /app/worker
+RUN chown -R nobody:nobody /app
 USER nobody
 CMD ["./worker"]
