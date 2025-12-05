@@ -1,9 +1,6 @@
 version: "3.8"
 
 services:
-  # --- LAYANAN LOKAL OPSIONAL ---
-  # Layanan ini HANYA akan berjalan jika Anda menjalankan
-  # docker compose --profile local-services up
   
   db:
     image: docker.io/library/mongo:4.4
@@ -23,24 +20,25 @@ services:
     networks:
       - worker-net
 
-  # --- LAYANAN INTI ANDA ---
-  # Servis ini akan SELALU berjalan
-  
   worker:
     build:
       context: . # Asumsi Dockerfile ada di folder ini
     
+    restart: always
+
+    deploy:
+      resources:
+        limits:
+          cpus: '0.90'
+          memory: 800M
+
     environment:
-      # --- SAKLAR KONEKSI ---
       # Gunakan MONGO_URI dari .env. JIKA KOSONG (:-), gunakan 'db' lokal.
       - MONGO_URI=${MONGO_URI:-mongodb://db:27017/yayasan_veritas}
       
       # Gunakan REDIS_URI dari .env. JIKA KOSONG (:-), gunakan 'queue' lokal.
       - REDIS_URI=${REDIS_URI:-redis://queue:6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-      
-      # --- KREDENSIAL CLOUD STORAGE ---
-      # Variabel ini WAJIB diisi di file .env
       - STORAGE_PROVIDER=${STORAGE_PROVIDER}
       - R2_ENDPOINT=${R2_ENDPOINT}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
@@ -48,19 +46,16 @@ services:
       - R2_BUCKET_NAME=${R2_BUCKET_NAME}
       - R2_PUBLIC_URL=${R2_PUBLIC_URL}
       - R2_REGION=${R2_REGION}
+      - GOMEMLIMIT=720MiB
       
-    # Kunci untuk Skenario 3: Menambahkan "jembatan"
-    # ke localhost milik host (laptop/VPS Anda)
     extra_hosts:
       - "host.docker.internal:host-gateway"
       
     networks:
       - worker-net
 
-# Jaringan agar semua kontainer bisa saling "bicara"
 networks:
   worker-net:
 
-# Volume untuk menyimpan data Mongo agar tidak hilang saat kontainer mati
 volumes:
   mongo-data:
