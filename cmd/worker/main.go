@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"strconv"
+	"sync"
 
 	"org-worker/internal/config"
 	"org-worker/internal/domain"
@@ -32,7 +34,18 @@ func main() {
 	reportHandler := report.NewReportHandler(reportRepo, storageProvider)
 	imageHandler := image.NewImageHandler(imageJobRepo, storageProvider)
 
-	logger.Info("Worker is running...")
+	maxConcurrency := 10
+	if val := os.Getenv("MAX_CONCURRENCY"); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil {
+			maxConcurrency = parsed
+		}
+	}
+
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+
+	logger.Info("Worker is running with concurrency limit:", "limit", maxConcurrency)
+
 	for {
 		result, err := queue.BLPop(redisClient, ctx, "task_queue")
 		if err != nil {
@@ -40,43 +53,55 @@ func main() {
 			continue
 		}
 		if len(result) < 2 {
-			logger.Warn("Received empty job from queue")
-			continue
-		}
-		var job domain.Job
-		if err := json.Unmarshal([]byte(result[1]), &job); err != nil {
-			logger.Error("Failed to unmarshal job", "err", err)
 			continue
 		}
 
-		switch job.TaskType {
-		case "generate_report":
-			var payload domain.ReportJobPayload
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				logger.Error("Failed to unmarshal report payload", "err", err)
-				continue
+		sem <- struct{}{}
+
+		wg.Add(1)
+
+		go func(data string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			var job domain.Job
+			if err := json.Unmarshal([]byte(data), &job); err != nil {
+				logger.Error("Failed to unmarshal job", "err", err)
+				return
 			}
-			logger.Info("Received job", "reportID", payload.ReportID, "taskType", job.TaskType)
-			reportDoc, err := reportRepo.GetReportByID(ctx, payload.ReportID)
-			if err != nil {
-				logger.Error("Failed to get report from MongoDB", "err", err)
-				continue
+
+			switch job.TaskType {
+			case "generate_report":
+				var payload domain.ReportJobPayload
+				if err := json.Unmarshal(job.Payload, &payload); err != nil {
+					logger.Error("Failed to unmarshal report payload", "err", err)
+					return
+				}
+				logger.Info("Received job", "reportID", payload.ReportID, "taskType", job.TaskType)
+
+				reportDoc, err := reportRepo.GetReportByID(ctx, payload.ReportID)
+				if err != nil {
+					logger.Error("Failed to get report", "err", err)
+					return
+				}
+				if err := reportHandler.HandleReportGeneration(ctx, logger, reportDoc); err != nil {
+					logger.Error("ERROR generate_report", "err", err)
+				}
+
+			case "process_image":
+				var payload domain.ImageJobPayload
+				if err := json.Unmarshal(job.Payload, &payload); err != nil {
+					logger.Error("Failed to unmarshal image payload", "err", err)
+					return
+				}
+				logger.Info("Starting job processing", "imageJobID", payload.ImageJobID)
+
+				if err := imageHandler.HandleImageProcessing(ctx, logger, payload.ImageJobID); err != nil {
+					logger.Error("ERROR process_image", "err", err)
+				}
+			default:
+				logger.Warn("Unknown task type", "taskType", job.TaskType)
 			}
-			if err := reportHandler.HandleReportGeneration(ctx, logger, reportDoc); err != nil {
-				logger.Error("ERROR generate_report", "err", err)
-			}
-		case "process_image":
-			var payload domain.ImageJobPayload
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				logger.Error("Failed to unmarshal image payload", "err", err)
-				continue
-			}
-			logger.Info("Received job", "imageJobID", payload.ImageJobID, "taskType", job.TaskType)
-			if err := imageHandler.HandleImageProcessing(ctx, logger, payload.ImageJobID); err != nil {
-				logger.Error("ERROR process_image", "err", err)
-			}
-		default:
-			logger.Warn("Unknown task type", "taskType", job.TaskType)
-		}
+		}(result[1])
 	}
 }
